@@ -29,11 +29,8 @@ import { Loader2, LogIn, UserPlus, BrainCircuit, BarChart3, Database, LineChart 
 
 export default function AuthPage() {
   const [location, setLocation] = useLocation();
-  // Temporarily remove auth dependencies
-  // const { user, isLoading, loginMutation, registerMutation } = useAuth();
+  const { user, isLoading, loginMutation, registerMutation } = useAuth();
   const [activeTab, setActiveTab] = useState('login');
-  const isLoading = false;
-  const user = null;
 
   // Redirect if already logged in
   useEffect(() => {
@@ -83,16 +80,14 @@ export default function AuthPage() {
 
   const onLoginSubmit = (values: z.infer<typeof loginSchema>) => {
     console.log('Login form submitted:', values);
-    // loginMutation.mutate(values);
-    alert('Login functionality is disabled in this demo. Please check the console for form values.');
+    loginMutation.mutate(values);
   };
 
   const onRegisterSubmit = (values: z.infer<typeof registerSchema>) => {
     // Remove confirmPassword as it's not in the API schema
     const { confirmPassword, ...registerData } = values;
     console.log('Register form submitted:', registerData);
-    // registerMutation.mutate(registerData);
-    alert('Registration functionality is disabled in this demo. Please check the console for form values.');
+    registerMutation.mutate(registerData);
   };
 
   if (isLoading) {
