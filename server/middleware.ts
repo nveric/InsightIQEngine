@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { storage } from "./storage";
+import { Organization } from "@shared/schema";
 
 /**
  * Middleware to ensure the user has access to the requested organization
@@ -30,8 +31,13 @@ export async function tenantIsolationMiddleware(req: Request, res: Response, nex
     }
 
     // Add organization and user role in the organization to the request for future use
-    req.organization = await storage.getOrganization(organizationId);
-    req.orgRole = membership.role;
+    const organization = await storage.getOrganization(organizationId);
+    if (organization) {
+      req.organization = organization;
+      req.orgRole = membership.role || "member";
+    } else {
+      return res.status(404).json({ error: "Organization not found" });
+    }
     
     next();
   } catch (error) {
@@ -101,7 +107,7 @@ export function roleCheckMiddleware(requiredRoles: string[]) {
 declare global {
   namespace Express {
     interface Request {
-      organization?: any;
+      organization?: Organization;
       orgRole?: string;
     }
   }
