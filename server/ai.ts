@@ -1,9 +1,14 @@
 import fetch from "node-fetch";
 
 // Using OpenRouter instead of OpenAI directly
-const OPENROUTER_API_KEY = "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";
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_MODEL = "tngtech/deepseek-r1t-chimera:free";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+
+// Validate that the API key is available
+if (!OPENROUTER_API_KEY) {
+  console.error("OPENROUTER_API_KEY is not set in environment variables");
+}
 
 // Schema type definition for database schema
 interface TableSchema {
@@ -53,6 +58,8 @@ Generate a valid SQL query that answers this question.
 Only return the SQL query without any explanation or markdown formatting.
 `;
 
+    console.log("Sending NL-to-SQL request to OpenRouter.ai...");
+    
     // Call OpenRouter API
     const response = await fetch(OPENROUTER_URL, {
       method: "POST",
@@ -69,7 +76,18 @@ Only return the SQL query without any explanation or markdown formatting.
       })
     });
 
+    console.log(`OpenRouter response status: ${response.status}`);
     const responseData = await response.json() as any;
+    
+    // Log response structure (without the full content for brevity)
+    console.log("OpenRouter response structure:", 
+      JSON.stringify({
+        ...responseData,
+        choices: responseData.choices ? 
+          responseData.choices.map((c: any) => ({ ...c, message: { ...c.message, content: "[Content truncated]" } })) : 
+          undefined
+      }, null, 2)
+    );
     
     if (!response.ok) {
       throw new Error(`OpenRouter API returned an error: ${responseData.error?.message || response.statusText}`);
@@ -84,7 +102,11 @@ Only return the SQL query without any explanation or markdown formatting.
     return sqlQuery;
   } catch (error) {
     console.error("Error converting natural language to SQL:", error);
-    throw new Error("Failed to convert natural language to SQL");
+    if (error instanceof Error) {
+      throw new Error(`Failed to convert natural language to SQL: ${error.message}`);
+    } else {
+      throw new Error("Failed to convert natural language to SQL: Unknown error");
+    }
   }
 }
 
@@ -108,6 +130,8 @@ Format your response as a JSON object with a field named "insights" that contain
 Example: { "insights": ["Insight 1 description", "Insight 2 description", "Insight 3 description"] }
 `;
 
+    console.log("Sending data insights request to OpenRouter.ai...");
+    
     // Call OpenRouter API
     const response = await fetch(OPENROUTER_URL, {
       method: "POST",
@@ -124,7 +148,18 @@ Example: { "insights": ["Insight 1 description", "Insight 2 description", "Insig
       })
     });
 
+    console.log(`OpenRouter response status for insights: ${response.status}`);
     const responseData = await response.json() as any;
+    
+    // Log response structure (without the full content for brevity)
+    console.log("OpenRouter insights response structure:", 
+      JSON.stringify({
+        ...responseData,
+        choices: responseData.choices ? 
+          responseData.choices.map((c: any) => ({ ...c, message: { ...c.message, content: "[Content truncated]" } })) : 
+          undefined
+      }, null, 2)
+    );
     
     if (!response.ok) {
       throw new Error(`OpenRouter API returned an error: ${responseData.error?.message || response.statusText}`);
@@ -137,15 +172,20 @@ Example: { "insights": ["Insight 1 description", "Insight 2 description", "Insig
     }
 
     try {
-      const parsedResponse = JSON.parse(insightsText);
+      const parsedResponse = JSON.parse(insightsText) as { insights: string[] };
       const insights = parsedResponse.insights;
       return Array.isArray(insights) ? insights : [insightsText];
     } catch (e) {
       // If parsing fails, return the raw text as a single insight
+      console.log("Failed to parse AI response as JSON:", e);
       return [insightsText];
     }
   } catch (error) {
     console.error("Error generating data insights:", error);
-    return ["Failed to generate insights. Please try again later."];
+    if (error instanceof Error) {
+      return [`Failed to generate insights: ${error.message}`];
+    } else {
+      return ["Failed to generate insights. Please try again later."];
+    }
   }
 }
