@@ -10,11 +10,47 @@ import {
   Play, 
   Save, 
   AlertCircle, 
-  BarChart,
-  Terminal
+  Terminal,
+  History,
+  FileCode,
+  ArrowRight,
+  FileQuestion,
+  FileDown
 } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
 import { ChartCard } from '@/components/dashboard/chart-card';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { format } from 'sql-formatter';
+import { 
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogFooter,
+  DialogClose
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+
+// Interface for query history items
+interface QueryHistoryItem {
+  id: string;
+  query: string;
+  timestamp: Date;
+  success: boolean;
+  rowCount?: number;
+}
+
+// Interface for query templates
+interface QueryTemplate {
+  name: string;
+  description: string;
+  sql: string;
+  icon: React.ReactNode;
+}
 
 interface SqlEditorProps {
   dataSourceId?: number;
@@ -32,6 +68,22 @@ export function SqlEditor({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resultsTab, setResultsTab] = useState('table');
+  
+  // Query history state
+  const [queryHistory, setQueryHistory] = useState<QueryHistoryItem[]>(() => {
+    const savedHistory = localStorage.getItem('sqlQueryHistory');
+    return savedHistory ? JSON.parse(savedHistory) : [];
+  });
+  
+  // Query save dialog state
+  const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
+  const [queryName, setQueryName] = useState('');
+  const [queryDescription, setQueryDescription] = useState('');
+  
+  // Save history to localStorage when it changes
+  useEffect(() => {
+    localStorage.setItem('sqlQueryHistory', JSON.stringify(queryHistory));
+  }, [queryHistory]);
 
   const insertText = (text: string) => {
     setQuery(prev => {
@@ -50,6 +102,14 @@ export function SqlEditor({
 
   const handleNlqGenerated = (generatedSql: string) => {
     setQuery(generatedSql);
+  };
+  
+  const loadFromHistory = (historyItem: QueryHistoryItem) => {
+    setQuery(historyItem.query);
+  };
+  
+  const clearHistory = () => {
+    setQueryHistory([]);
   };
 
   const runQuery = async () => {
@@ -76,20 +136,91 @@ export function SqlEditor({
         body: JSON.stringify({ query }),
       });
 
+      const data = await response.json();
+      
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(errorText || response.statusText);
+        throw new Error(data.error || response.statusText);
       }
 
-      const data = await response.json();
       setQueryResults(data);
       setResultsTab('table'); // Default to table view for new results
+      
+      // Add to query history
+      const historyItem: QueryHistoryItem = {
+        id: Date.now().toString(),
+        query,
+        timestamp: new Date(),
+        success: true,
+        rowCount: data.rowCount
+      };
+      
+      setQueryHistory(prev => [historyItem, ...prev.slice(0, 19)]); // Keep last 20 queries
+      
     } catch (err) {
       console.error('Error executing query:', err);
-      setError(err instanceof Error ? err.message : 'An unknown error occurred');
+      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
+      setError(errorMessage);
+      
+      // Add failed query to history
+      const historyItem: QueryHistoryItem = {
+        id: Date.now().toString(),
+        query,
+        timestamp: new Date(),
+        success: false
+      };
+      
+      setQueryHistory(prev => [historyItem, ...prev.slice(0, 19)]);
+      
     } finally {
       setIsLoading(false);
     }
+  };
+  
+  const handleSaveQuery = () => {
+    if (onSave && queryName.trim()) {
+      onSave(queryName, query);
+      setQueryName('');
+      setQueryDescription('');
+      setIsSaveDialogOpen(false);
+    }
+  };
+
+  // Query templates for common SQL operations
+  const queryTemplates: QueryTemplate[] = [
+    {
+      name: 'Select All',
+      description: 'Retrieve all records from a table',
+      sql: 'SELECT * FROM table_name LIMIT 100;',
+      icon: <FileCode className="h-4 w-4" />
+    },
+    {
+      name: 'Count Records',
+      description: 'Count the number of records in a table',
+      sql: 'SELECT COUNT(*) AS record_count FROM table_name;',
+      icon: <FileQuestion className="h-4 w-4" />
+    },
+    {
+      name: 'Filter Data',
+      description: 'Select records that match specific criteria',
+      sql: 'SELECT * FROM table_name WHERE column_name = value LIMIT 100;',
+      icon: <FileDown className="h-4 w-4" />
+    },
+    {
+      name: 'Group By',
+      description: 'Group records and calculate aggregates',
+      sql: 'SELECT column1, COUNT(*) AS count, SUM(column2) AS total\nFROM table_name\nGROUP BY column1\nORDER BY count DESC;',
+      icon: <FileCode className="h-4 w-4" />
+    },
+    {
+      name: 'Join Tables',
+      description: 'Combine data from multiple tables',
+      sql: 'SELECT t1.column1, t2.column2\nFROM table1 t1\nJOIN table2 t2 ON t1.id = t2.table1_id\nLIMIT 100;',
+      icon: <FileCode className="h-4 w-4" />
+    }
+  ];
+  
+  const applyTemplate = (template: QueryTemplate) => {
+    setQuery(template.sql);
   };
 
   const getChartType = () => {
@@ -150,6 +281,11 @@ export function SqlEditor({
       return rowObj;
     });
   };
+  
+  // Format the SQL query for display in history
+  const formatQueryPreview = (sql: string) => {
+    return sql.length > 60 ? sql.substring(0, 57) + '...' : sql;
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -158,9 +294,142 @@ export function SqlEditor({
         <div className="flex-1 flex flex-col min-w-0">
           <Card className="flex-1 flex flex-col overflow-hidden border-0 shadow-none">
             <CardHeader className="px-4 py-2 border-b">
-              <CardTitle className="text-sm font-medium flex items-center">
-                <Terminal className="mr-2 h-4 w-4" />
-                SQL Editor
+              <CardTitle className="text-sm font-medium flex items-center justify-between">
+                <div className="flex items-center">
+                  <Terminal className="mr-2 h-4 w-4" />
+                  SQL Editor
+                </div>
+                
+                <div className="flex items-center space-x-2">
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Dialog>
+                          <DialogTrigger asChild>
+                            <Button variant="ghost" size="sm">
+                              <History className="h-4 w-4" />
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent className="max-w-xl">
+                            <DialogHeader>
+                              <DialogTitle>Query History</DialogTitle>
+                            </DialogHeader>
+                            
+                            <div className="h-[400px]">
+                              <ScrollArea className="h-full pr-4">
+                                {queryHistory.length === 0 ? (
+                                  <div className="p-4 text-center text-gray-500">
+                                    No query history yet
+                                  </div>
+                                ) : (
+                                  <div className="space-y-2 pr-4">
+                                    {queryHistory.map(item => (
+                                      <div 
+                                        key={item.id} 
+                                        className={`p-3 rounded-md text-sm border ${item.success ? 'border-gray-200' : 'border-red-200 bg-red-50'}`}
+                                      >
+                                        <div className="flex justify-between items-start mb-1">
+                                          <div className="font-mono text-xs text-gray-600">
+                                            {item.timestamp.toLocaleString()}
+                                          </div>
+                                          <div className={`text-xs ${item.success ? 'text-green-600' : 'text-red-600'}`}>
+                                            {item.success ? `Success (${item.rowCount} rows)` : 'Failed'}
+                                          </div>
+                                        </div>
+                                        <div className="font-mono text-xs mb-2 bg-gray-50 p-2 rounded border break-all">
+                                          {formatQueryPreview(item.query)}
+                                        </div>
+                                        <Button 
+                                          variant="outline" 
+                                          size="sm"
+                                          className="mt-1 w-full text-xs"
+                                          onClick={() => {
+                                            loadFromHistory(item);
+                                            (document.querySelector('[data-state="open"] button[data-state="closed"]') as HTMLButtonElement)?.click();
+                                          }}
+                                        >
+                                          Load Query
+                                          <ArrowRight className="ml-2 h-3 w-3" />
+                                        </Button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </ScrollArea>
+                            </div>
+                            
+                            <DialogFooter>
+                              <Button 
+                                variant="outline" 
+                                size="sm" 
+                                onClick={clearHistory}
+                                disabled={queryHistory.length === 0}
+                              >
+                                Clear History
+                              </Button>
+                              <DialogClose asChild>
+                                <Button variant="secondary" size="sm">Close</Button>
+                              </DialogClose>
+                            </DialogFooter>
+                          </DialogContent>
+                        </Dialog>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>View Query History</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                  
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Dialog>
+                          <DialogTrigger asChild>
+                            <Button variant="ghost" size="sm">
+                              <FileCode className="h-4 w-4" />
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent className="max-w-md">
+                            <DialogHeader>
+                              <DialogTitle>Query Templates</DialogTitle>
+                            </DialogHeader>
+                            
+                            <div className="space-y-2 mt-2">
+                              {queryTemplates.map((template, index) => (
+                                <div 
+                                  key={index}
+                                  className="p-3 rounded-md border hover:bg-gray-50 cursor-pointer"
+                                  onClick={() => {
+                                    applyTemplate(template);
+                                    const closeButton = document.querySelector('[data-state="open"] button[data-state="closed"]');
+                                    if (closeButton && closeButton instanceof HTMLButtonElement) {
+                                      closeButton.click();
+                                    }
+                                  }}
+                                >
+                                  <div className="flex items-center">
+                                    {template.icon}
+                                    <span className="ml-2 font-medium">{template.name}</span>
+                                  </div>
+                                  <p className="text-sm text-gray-500 mt-1">{template.description}</p>
+                                </div>
+                              ))}
+                            </div>
+                            
+                            <DialogFooter>
+                              <DialogClose asChild>
+                                <Button variant="secondary" size="sm">Close</Button>
+                              </DialogClose>
+                            </DialogFooter>
+                          </DialogContent>
+                        </Dialog>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Query Templates</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0 flex-1 flex flex-col">
@@ -184,14 +453,71 @@ export function SqlEditor({
                 </div>
                 <div className="flex gap-2">
                   {onSave && (
-                    <Button variant="outline" size="sm" onClick={() => onSave('New Query', query)}>
-                      <Save className="h-4 w-4 mr-2" />
-                      Save
-                    </Button>
+                    <Dialog open={isSaveDialogOpen} onOpenChange={setIsSaveDialogOpen}>
+                      <DialogTrigger asChild>
+                        <Button variant="outline" size="sm">
+                          <Save className="h-4 w-4 mr-2" />
+                          Save
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent className="sm:max-w-md">
+                        <DialogHeader>
+                          <DialogTitle>Save Query</DialogTitle>
+                        </DialogHeader>
+                        <div className="space-y-4 py-2">
+                          <div className="space-y-2">
+                            <Label htmlFor="query-name">Query Name</Label>
+                            <Input 
+                              id="query-name" 
+                              value={queryName} 
+                              onChange={(e) => setQueryName(e.target.value)}
+                              placeholder="Enter a name for this query"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="query-description">Description (Optional)</Label>
+                            <Textarea 
+                              id="query-description" 
+                              value={queryDescription} 
+                              onChange={(e) => setQueryDescription(e.target.value)}
+                              placeholder="Add a description for this query"
+                              rows={3}
+                            />
+                          </div>
+                        </div>
+                        <DialogFooter>
+                          <Button 
+                            variant="outline" 
+                            onClick={() => setIsSaveDialogOpen(false)}
+                          >
+                            Cancel
+                          </Button>
+                          <Button 
+                            onClick={handleSaveQuery}
+                            disabled={!queryName.trim()}
+                          >
+                            Save Query
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
                   )}
-                  <Button size="sm" onClick={runQuery} disabled={isLoading}>
-                    <Play className="h-4 w-4 mr-2" />
-                    Run Query
+                  <Button 
+                    size="sm" 
+                    onClick={runQuery} 
+                    disabled={isLoading}
+                  >
+                    {isLoading ? (
+                      <>
+                        <span className="animate-spin mr-2">⟳</span>
+                        Running...
+                      </>
+                    ) : (
+                      <>
+                        <Play className="h-4 w-4 mr-2" />
+                        Run Query
+                      </>
+                    )}
                   </Button>
                 </div>
               </div>
