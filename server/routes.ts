@@ -3,32 +3,230 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { setupAuth } from "./auth";
 import { z } from "zod";
-import { insertDataSourceSchema, insertSavedQuerySchema, insertDashboardSchema, insertDashboardItemSchema } from "@shared/schema";
+import { 
+  insertDataSourceSchema, 
+  insertSavedQuerySchema, 
+  insertDashboardSchema, 
+  insertDashboardItemSchema,
+  insertOrganizationSchema,
+  insertOrganizationMemberSchema 
+} from "@shared/schema";
 import { convertNaturalLanguageToSQL } from "./ai";
 import { testDataSourceConnection, fetchSchemaFromDataSource, executeQuery } from "./data-connectors";
+import { tenantIsolationMiddleware, roleCheckMiddleware } from "./middleware";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Set up authentication routes
   setupAuth(app);
-
-  // Data Sources Routes
-  app.get("/api/datasources", async (req, res, next) => {
+  
+  // Apply tenant isolation middleware to all organization-scoped endpoints
+  app.use("/api/organizations/:organizationId", tenantIsolationMiddleware);
+  
+  // Organization management routes
+  app.get("/api/organizations/:organizationId", async (req, res, next) => {
+    try {
+      // Already authenticated and authorized by middleware
+      res.json(req.organization);
+    } catch (error) {
+      next(error);
+    }
+  });
+  
+  // Create a new organization
+  app.post("/api/organizations", async (req, res, next) => {
     try {
       if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
-      const dataSources = await storage.getAllDataSources(req.user.id);
+      
+      const validatedData = insertOrganizationSchema.parse(req.body);
+      
+      // Create the organization
+      const organization = await storage.createOrganization(validatedData);
+      
+      // Add the current user as the owner
+      await storage.addOrganizationMember({
+        organizationId: organization.id,
+        userId: req.user.id,
+        role: "owner"
+      });
+      
+      res.status(201).json(organization);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors });
+      }
+      next(error);
+    }
+  });
+  
+  // Update organization
+  app.patch("/api/organizations/:organizationId", 
+    roleCheckMiddleware(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const orgId = parseInt(req.params.organizationId);
+        const updates = req.body;
+        
+        // Don't allow changing the slug if it's different from the current one
+        if (updates.slug && updates.slug !== req.organization.slug) {
+          // Check if the new slug is already taken
+          const existingOrg = await storage.getOrganizationBySlug(updates.slug);
+          if (existingOrg && existingOrg.id !== orgId) {
+            return res.status(400).json({ message: "Organization slug already exists" });
+          }
+        }
+        
+        const validatedData = insertOrganizationSchema.partial().parse(updates);
+        const updatedOrg = await storage.updateOrganization(orgId, validatedData);
+        
+        res.json(updatedOrg);
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return res.status(400).json({ message: error.errors });
+        }
+        next(error);
+      }
+    }
+  );
+  
+  // Get organization members
+  app.get("/api/organizations/:organizationId/members", async (req, res, next) => {
+    try {
+      const orgId = parseInt(req.params.organizationId);
+      const members = await storage.getOrganizationMembers(orgId);
+      res.json(members);
+    } catch (error) {
+      next(error);
+    }
+  });
+  
+  // Add a member to organization
+  app.post("/api/organizations/:organizationId/members", 
+    roleCheckMiddleware(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const orgId = parseInt(req.params.organizationId);
+        
+        // Validate the username exists
+        const { username, role } = req.body;
+        if (!username) {
+          return res.status(400).json({ message: "Username is required" });
+        }
+        
+        const user = await storage.getUserByUsername(username);
+        if (!user) {
+          return res.status(404).json({ message: "User not found" });
+        }
+        
+        // Check if the user is already a member
+        const existingMember = await storage.getOrganizationMember(orgId, user.id);
+        if (existingMember) {
+          return res.status(400).json({ message: "User is already a member of this organization" });
+        }
+        
+        // Add the user to the organization
+        const membership = await storage.addOrganizationMember({
+          organizationId: orgId,
+          userId: user.id,
+          role: role || "member"
+        });
+        
+        // Return the member with user details
+        const memberWithUser = {
+          ...membership,
+          user
+        };
+        
+        res.status(201).json(memberWithUser);
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+  
+  // Update a member's role
+  app.patch("/api/organizations/:organizationId/members/:userId", 
+    roleCheckMiddleware(["owner"]),
+    async (req, res, next) => {
+      try {
+        const orgId = parseInt(req.params.organizationId);
+        const userId = parseInt(req.params.userId);
+        const { role } = req.body;
+        
+        if (!role) {
+          return res.status(400).json({ message: "Role is required" });
+        }
+        
+        // Don't allow changing the role of the owner
+        const member = await storage.getOrganizationMember(orgId, userId);
+        if (!member) {
+          return res.status(404).json({ message: "Member not found" });
+        }
+        
+        // Check if trying to change the role of the owner
+        if (member.role === "owner" && role !== "owner") {
+          return res.status(403).json({ message: "Cannot change the role of the organization owner" });
+        }
+        
+        const updatedMember = await storage.updateOrganizationMember(orgId, userId, role);
+        
+        res.json(updatedMember);
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+  
+  // Remove a member from organization
+  app.delete("/api/organizations/:organizationId/members/:userId", 
+    roleCheckMiddleware(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const orgId = parseInt(req.params.organizationId);
+        const userId = parseInt(req.params.userId);
+        
+        // Don't allow removing the owner
+        const member = await storage.getOrganizationMember(orgId, userId);
+        if (!member) {
+          return res.status(404).json({ message: "Member not found" });
+        }
+        
+        if (member.role === "owner") {
+          return res.status(403).json({ message: "Cannot remove the organization owner" });
+        }
+        
+        // Also don't allow admins to remove other admins
+        if (req.orgRole === "admin" && member.role === "admin") {
+          return res.status(403).json({ message: "Admins cannot remove other admins" });
+        }
+        
+        await storage.removeOrganizationMember(orgId, userId);
+        
+        res.status(204).send();
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  // Data Sources Routes - Using organizationId from req.organization
+  app.get("/api/organizations/:organizationId/datasources", async (req, res, next) => {
+    try {
+      const orgId = parseInt(req.params.organizationId);
+      const dataSources = await storage.getAllDataSources(orgId);
       res.json(dataSources);
     } catch (error) {
       next(error);
     }
   });
 
-  app.post("/api/datasources", async (req, res, next) => {
+  app.post("/api/organizations/:organizationId/datasources", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
+      const orgId = parseInt(req.params.organizationId);
       
       const validatedData = insertDataSourceSchema.parse({
         ...req.body,
-        userId: req.user.id
+        userId: req.user.id,
+        organizationId: orgId
       });
       
       // Test connection before saving
@@ -47,10 +245,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/datasources/:id", async (req, res, next) => {
+  app.get("/api/organizations/:organizationId/datasources/:id", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
-      
       const id = parseInt(req.params.id);
       const dataSource = await storage.getDataSource(id);
       
@@ -58,7 +254,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Data source not found" });
       }
       
-      if (dataSource.userId !== req.user.id) {
+      // Check if data source belongs to the organization
+      const orgId = parseInt(req.params.organizationId);
+      if (dataSource.organizationId !== orgId) {
         return res.status(403).json({ message: "Forbidden" });
       }
       
@@ -68,33 +266,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/datasources/:id", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
-      
-      const id = parseInt(req.params.id);
-      const dataSource = await storage.getDataSource(id);
-      
-      if (!dataSource) {
-        return res.status(404).json({ message: "Data source not found" });
+  app.delete("/api/organizations/:organizationId/datasources/:id", 
+    roleCheckMiddleware(["owner", "admin"]),
+    async (req, res, next) => {
+      try {
+        const id = parseInt(req.params.id);
+        const dataSource = await storage.getDataSource(id);
+        
+        if (!dataSource) {
+          return res.status(404).json({ message: "Data source not found" });
+        }
+        
+        // Check if data source belongs to the organization
+        const orgId = parseInt(req.params.organizationId);
+        if (dataSource.organizationId !== orgId) {
+          return res.status(403).json({ message: "Forbidden" });
+        }
+        
+        await storage.deleteDataSource(id);
+        res.status(204).send();
+      } catch (error) {
+        next(error);
       }
-      
-      if (dataSource.userId !== req.user.id) {
-        return res.status(403).json({ message: "Forbidden" });
-      }
-      
-      await storage.deleteDataSource(id);
-      res.status(204).send();
-    } catch (error) {
-      next(error);
     }
-  });
+  );
 
-  // Schema Routes
-  app.get("/api/datasources/:id/schema", async (req, res, next) => {
+  // Schema Routes - Organization scoped
+  app.get("/api/organizations/:organizationId/datasources/:id/schema", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
-      
       const id = parseInt(req.params.id);
       const dataSource = await storage.getDataSource(id);
       
@@ -102,7 +301,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Data source not found" });
       }
       
-      if (dataSource.userId !== req.user.id) {
+      // Check if the datasource belongs to the organization
+      const orgId = parseInt(req.params.organizationId);
+      if (dataSource.organizationId !== orgId) {
         return res.status(403).json({ message: "Forbidden" });
       }
       
@@ -113,11 +314,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Query Execution Routes
-  app.post("/api/datasources/:id/execute", async (req, res, next) => {
+  // Query Execution Routes - Organization scoped
+  app.post("/api/organizations/:organizationId/datasources/:id/execute", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
-      
       const id = parseInt(req.params.id);
       const dataSource = await storage.getDataSource(id);
       
@@ -125,7 +324,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Data source not found" });
       }
       
-      if (dataSource.userId !== req.user.id) {
+      // Check if the datasource belongs to the organization
+      const orgId = parseInt(req.params.organizationId);
+      if (dataSource.organizationId !== orgId) {
         return res.status(403).json({ message: "Forbidden" });
       }
       
@@ -141,11 +342,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Natural Language to SQL Routes
-  app.post("/api/datasources/:id/nlq", async (req, res, next) => {
+  // Natural Language to SQL Routes - Organization scoped
+  app.post("/api/organizations/:organizationId/datasources/:id/nlq", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
-      
       const id = parseInt(req.params.id);
       const dataSource = await storage.getDataSource(id);
       
@@ -153,7 +352,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Data source not found" });
       }
       
-      if (dataSource.userId !== req.user.id) {
+      // Check if the datasource belongs to the organization
+      const orgId = parseInt(req.params.organizationId);
+      if (dataSource.organizationId !== orgId) {
         return res.status(403).json({ message: "Forbidden" });
       }
       
@@ -172,24 +373,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Saved Queries Routes
-  app.get("/api/queries", async (req, res, next) => {
+  // Organization-scoped Saved Queries Routes
+  app.get("/api/organizations/:organizationId/queries", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
-      const queries = await storage.getAllSavedQueries(req.user.id);
+      const orgId = parseInt(req.params.organizationId);
+      const queries = await storage.getAllSavedQueries(orgId);
       res.json(queries);
     } catch (error) {
       next(error);
     }
   });
 
-  app.post("/api/queries", async (req, res, next) => {
+  app.post("/api/organizations/:organizationId/queries", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
+      const orgId = parseInt(req.params.organizationId);
       
       const validatedData = insertSavedQuerySchema.parse({
         ...req.body,
-        userId: req.user.id
+        userId: req.user.id,
+        organizationId: orgId
       });
       
       const savedQuery = await storage.createSavedQuery(validatedData);
@@ -201,25 +403,109 @@ export async function registerRoutes(app: Express): Promise<Server> {
       next(error);
     }
   });
-
-  // Dashboard Routes
-  app.get("/api/dashboards", async (req, res, next) => {
+  
+  // Get a specific saved query
+  app.get("/api/organizations/:organizationId/queries/:id", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
-      const dashboards = await storage.getAllDashboards(req.user.id);
+      const queryId = parseInt(req.params.id);
+      const query = await storage.getSavedQuery(queryId);
+      
+      if (!query) {
+        return res.status(404).json({ message: "Query not found" });
+      }
+      
+      // Check if the query belongs to the organization
+      const orgId = parseInt(req.params.organizationId);
+      if (query.organizationId !== orgId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      
+      res.json(query);
+    } catch (error) {
+      next(error);
+    }
+  });
+  
+  // Update a saved query
+  app.patch("/api/organizations/:organizationId/queries/:id", async (req, res, next) => {
+    try {
+      const queryId = parseInt(req.params.id);
+      const query = await storage.getSavedQuery(queryId);
+      
+      if (!query) {
+        return res.status(404).json({ message: "Query not found" });
+      }
+      
+      // Check if the query belongs to the organization
+      const orgId = parseInt(req.params.organizationId);
+      if (query.organizationId !== orgId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      
+      // Only allow the creator or admins/owners to update queries
+      if (query.userId !== req.user.id && !["owner", "admin"].includes(req.orgRole)) {
+        return res.status(403).json({ message: "You don't have permission to modify this query" });
+      }
+      
+      const validatedData = insertSavedQuerySchema.partial().parse(req.body);
+      const updatedQuery = await storage.updateSavedQuery(queryId, validatedData);
+      
+      res.json(updatedQuery);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors });
+      }
+      next(error);
+    }
+  });
+  
+  // Delete a saved query
+  app.delete("/api/organizations/:organizationId/queries/:id", async (req, res, next) => {
+    try {
+      const queryId = parseInt(req.params.id);
+      const query = await storage.getSavedQuery(queryId);
+      
+      if (!query) {
+        return res.status(404).json({ message: "Query not found" });
+      }
+      
+      // Check if the query belongs to the organization
+      const orgId = parseInt(req.params.organizationId);
+      if (query.organizationId !== orgId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      
+      // Only allow the creator or admins/owners to delete queries
+      if (query.userId !== req.user.id && !["owner", "admin"].includes(req.orgRole)) {
+        return res.status(403).json({ message: "You don't have permission to delete this query" });
+      }
+      
+      await storage.deleteSavedQuery(queryId);
+      res.status(204).send();
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Organization-scoped Dashboard Routes
+  app.get("/api/organizations/:organizationId/dashboards", async (req, res, next) => {
+    try {
+      const orgId = parseInt(req.params.organizationId);
+      const dashboards = await storage.getAllDashboards(orgId);
       res.json(dashboards);
     } catch (error) {
       next(error);
     }
   });
 
-  app.post("/api/dashboards", async (req, res, next) => {
+  app.post("/api/organizations/:organizationId/dashboards", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
+      const orgId = parseInt(req.params.organizationId);
       
       const validatedData = insertDashboardSchema.parse({
         ...req.body,
-        userId: req.user.id
+        userId: req.user.id,
+        organizationId: orgId
       });
       
       const dashboard = await storage.createDashboard(validatedData);
@@ -231,18 +517,116 @@ export async function registerRoutes(app: Express): Promise<Server> {
       next(error);
     }
   });
+  
+  // Get a specific dashboard
+  app.get("/api/organizations/:organizationId/dashboards/:id", async (req, res, next) => {
+    try {
+      const dashboardId = parseInt(req.params.id);
+      const dashboard = await storage.getDashboard(dashboardId);
+      
+      if (!dashboard) {
+        return res.status(404).json({ message: "Dashboard not found" });
+      }
+      
+      // Check if the dashboard belongs to the organization
+      const orgId = parseInt(req.params.organizationId);
+      if (dashboard.organizationId !== orgId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      
+      // Get the dashboard items
+      const items = await storage.getDashboardItems(dashboardId);
+      
+      res.json({
+        ...dashboard,
+        items
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+  
+  // Update a dashboard
+  app.patch("/api/organizations/:organizationId/dashboards/:id", async (req, res, next) => {
+    try {
+      const dashboardId = parseInt(req.params.id);
+      const dashboard = await storage.getDashboard(dashboardId);
+      
+      if (!dashboard) {
+        return res.status(404).json({ message: "Dashboard not found" });
+      }
+      
+      // Check if the dashboard belongs to the organization
+      const orgId = parseInt(req.params.organizationId);
+      if (dashboard.organizationId !== orgId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      
+      // Only allow the creator or admins/owners to update dashboards
+      if (dashboard.userId !== req.user.id && !["owner", "admin"].includes(req.orgRole)) {
+        return res.status(403).json({ message: "You don't have permission to modify this dashboard" });
+      }
+      
+      const validatedData = insertDashboardSchema.partial().parse(req.body);
+      const updatedDashboard = await storage.updateDashboard(dashboardId, validatedData);
+      
+      res.json(updatedDashboard);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors });
+      }
+      next(error);
+    }
+  });
+  
+  // Delete a dashboard
+  app.delete("/api/organizations/:organizationId/dashboards/:id", async (req, res, next) => {
+    try {
+      const dashboardId = parseInt(req.params.id);
+      const dashboard = await storage.getDashboard(dashboardId);
+      
+      if (!dashboard) {
+        return res.status(404).json({ message: "Dashboard not found" });
+      }
+      
+      // Check if the dashboard belongs to the organization
+      const orgId = parseInt(req.params.organizationId);
+      if (dashboard.organizationId !== orgId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      
+      // Only allow the creator or admins/owners to delete dashboards
+      if (dashboard.userId !== req.user.id && !["owner", "admin"].includes(req.orgRole)) {
+        return res.status(403).json({ message: "You don't have permission to delete this dashboard" });
+      }
+      
+      await storage.deleteDashboard(dashboardId);
+      res.status(204).send();
+    } catch (error) {
+      next(error);
+    }
+  });
 
   // Dashboard Items Routes
-  app.post("/api/dashboard-items", async (req, res, next) => {
+  app.post("/api/organizations/:organizationId/dashboard-items", async (req, res, next) => {
     try {
-      if (!req.isAuthenticated()) return res.status(401).json({ message: "Unauthorized" });
+      const orgId = parseInt(req.params.organizationId);
       
       const validatedData = insertDashboardItemSchema.parse(req.body);
       
-      // Verify ownership of dashboard
+      // Verify the dashboard exists and belongs to the organization
       const dashboard = await storage.getDashboard(validatedData.dashboardId);
-      if (!dashboard || dashboard.userId !== req.user.id) {
-        return res.status(403).json({ message: "Forbidden" });
+      if (!dashboard) {
+        return res.status(404).json({ message: "Dashboard not found" });
+      }
+      
+      if (dashboard.organizationId !== orgId) {
+        return res.status(403).json({ message: "Dashboard does not belong to this organization" });
+      }
+      
+      // Only allow the creator or admins/owners to add items to dashboards
+      if (dashboard.userId !== req.user.id && !["owner", "admin"].includes(req.orgRole)) {
+        return res.status(403).json({ message: "You don't have permission to modify this dashboard" });
       }
       
       const dashboardItem = await storage.createDashboardItem(validatedData);
@@ -251,6 +635,77 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: error.errors });
       }
+      next(error);
+    }
+  });
+  
+  // Update a dashboard item
+  app.patch("/api/organizations/:organizationId/dashboard-items/:id", async (req, res, next) => {
+    try {
+      const itemId = parseInt(req.params.id);
+      const item = await storage.getDashboardItem(itemId);
+      
+      if (!item) {
+        return res.status(404).json({ message: "Dashboard item not found" });
+      }
+      
+      // Check if the dashboard belongs to the organization
+      const dashboard = await storage.getDashboard(item.dashboardId);
+      if (!dashboard) {
+        return res.status(404).json({ message: "Dashboard not found" });
+      }
+      
+      const orgId = parseInt(req.params.organizationId);
+      if (dashboard.organizationId !== orgId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      
+      // Only allow the dashboard creator or admins/owners to update items
+      if (dashboard.userId !== req.user.id && !["owner", "admin"].includes(req.orgRole)) {
+        return res.status(403).json({ message: "You don't have permission to modify this dashboard" });
+      }
+      
+      const validatedData = insertDashboardItemSchema.partial().parse(req.body);
+      const updatedItem = await storage.updateDashboardItem(itemId, validatedData);
+      
+      res.json(updatedItem);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors });
+      }
+      next(error);
+    }
+  });
+  
+  // Delete a dashboard item
+  app.delete("/api/organizations/:organizationId/dashboard-items/:id", async (req, res, next) => {
+    try {
+      const itemId = parseInt(req.params.id);
+      const item = await storage.getDashboardItem(itemId);
+      
+      if (!item) {
+        return res.status(404).json({ message: "Dashboard item not found" });
+      }
+      
+      // Check if the dashboard belongs to the organization
+      const dashboard = await storage.getDashboard(item.dashboardId);
+      if (!dashboard) {
+        return res.status(404).json({ message: "Dashboard not found" });
+      }
+      
+      const orgId = parseInt(req.params.organizationId);
+      if (dashboard.organizationId !== orgId) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      
+      // Only allow the dashboard creator or admins/owners to delete items
+      if (dashboard.userId !== req.user.id && !["owner", "admin"].includes(req.orgRole)) {
+        return res.status(403).json({ message: "You don't have permission to modify this dashboard" });
+      }
+      
+      await storage.deleteDashboardItem(itemId);
+      res.status(204).send();
+    } catch (error) {
       next(error);
     }
   });
