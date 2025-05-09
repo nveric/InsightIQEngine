@@ -24,7 +24,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { useToast } from '@/hooks/use-toast';
 import { Link } from 'wouter';
 import { apiRequest } from '@/lib/queryClient';
-import { Play, Search, PlusCircle } from 'lucide-react';
+import { Play, Search, PlusCircle, Database } from 'lucide-react';
 
 // Sample data generators for the dashboard
 // In a real implementation, this would be fetched from the API
