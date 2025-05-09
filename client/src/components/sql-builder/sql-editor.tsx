@@ -345,7 +345,10 @@ export function SqlEditor({
                                           className="mt-1 w-full text-xs"
                                           onClick={() => {
                                             loadFromHistory(item);
-                                            (document.querySelector('[data-state="open"] button[data-state="closed"]') as HTMLButtonElement)?.click();
+                                            const closeButton = document.querySelector('[data-state="open"] button[data-state="closed"]');
+                                            if (closeButton && closeButton instanceof HTMLButtonElement) {
+                                              closeButton.click();
+                                            }
                                           }}
                                         >
                                           Load Query
