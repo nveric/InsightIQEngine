@@ -22,29 +22,29 @@ export default function SqlBuilder() {
   const [location, setLocation] = useLocation();
   const [selectedDataSource, setSelectedDataSource] = useState<number | undefined>();
   const [currentQuery, setCurrentQuery] = useState<string>('');
-  
+
   // Fetch data sources
   const { data: dataSources, isLoading: isLoadingDataSources } = useQuery<DataSource[]>({
     queryKey: ['/api/datasources'],
   });
-  
+
   // Fetch saved queries
   const { data: savedQueries } = useQuery<SavedQuery[]>({
     queryKey: ['/api/queries'],
   });
-  
+
   // Set the first data source as default if none selected
   useEffect(() => {
     if (dataSources && dataSources.length > 0 && !selectedDataSource) {
       setSelectedDataSource(dataSources[0].id);
     }
   }, [dataSources, selectedDataSource]);
-  
+
   // Handle data source change
   const handleDataSourceChange = (value: string) => {
     setSelectedDataSource(parseInt(value, 10));
   };
-  
+
   // Save query
   const saveQuery = async (name: string, query: string) => {
     if (!selectedDataSource) {
@@ -55,7 +55,7 @@ export default function SqlBuilder() {
       });
       return;
     }
-    
+
     try {
       const saveData: InsertSavedQuery = {
         name,
@@ -66,14 +66,14 @@ export default function SqlBuilder() {
         visualizationType: "table",
         visualizationConfig: {},
       };
-      
+
       await apiRequest('POST', '/api/queries', saveData);
-      
+
       toast({
         title: "Query saved",
         description: `Query "${name}" saved successfully`,
       });
-      
+
       // Refresh saved queries
       queryClient.invalidateQueries({ queryKey: ['/api/queries'] });
     } catch (error) {
@@ -84,18 +84,18 @@ export default function SqlBuilder() {
       });
     }
   };
-  
+
   // Load a saved query
   const loadSavedQuery = (query: SavedQuery) => {
     setSelectedDataSource(query.dataSourceId);
     setCurrentQuery(query.query);
-    
+
     toast({
       title: "Query loaded",
       description: `Loaded query: ${query.name}`,
     });
   };
-  
+
   // Check if user has any data sources
   const noDataSources = !dataSources || dataSources.length === 0;
 
@@ -139,7 +139,7 @@ export default function SqlBuilder() {
                 </SelectContent>
               </Select>
             </div>
-            
+
             {savedQueries && savedQueries.length > 0 && (
               <div className="flex items-center">
                 <span className="mr-2 text-sm text-gray-500">Saved Queries:</span>
@@ -162,7 +162,7 @@ export default function SqlBuilder() {
               </div>
             )}
           </div>
-          
+
           {/* SQL Editor */}
           <div className="h-[calc(100vh-220px)] min-h-[500px]">
             <SqlEditor
