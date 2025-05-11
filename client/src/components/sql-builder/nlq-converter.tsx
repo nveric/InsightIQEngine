@@ -13,7 +13,7 @@ interface NLQConverterProps {
   onQueryGenerated: (sql: string) => void;
 }
 
-export function NLQConverter({ schema, dataSourceType, onQueryGenerated }: NLQConverterProps) {
+export const NlqConverter = ({ schema, dataSourceType, onQueryGenerated }: NLQConverterProps) => {
   const [question, setQuestion] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
@@ -59,4 +59,4 @@ export function NLQConverter({ schema, dataSourceType, onQueryGenerated }: NLQCo
       </CardContent>
     </Card>
   );
-}
+};
