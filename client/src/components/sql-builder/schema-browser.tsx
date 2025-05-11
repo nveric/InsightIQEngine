@@ -1,80 +1,41 @@
 import { useState, useEffect } from 'react';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from '@/components/ui/accordion';
-import { Input } from '@/components/ui/input';
-import { Loader2, Search, Database, Table } from 'lucide-react';
-
-interface Column {
-  name: string;
-  type: string;
-  isPrimaryKey: boolean;
-  isForeignKey: boolean;
-}
-
-interface TableSchema {
-  name: string;
-  columns: Column[];
-}
+import { Database, ChevronRight, ChevronDown, Loader2 } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { apiRequest } from '@/lib/queryClient';
+import { TableSchema } from '@shared/schema';
 
 interface SchemaBrowserProps {
   dataSourceId?: number;
-  isLoading?: boolean;
   onTableClick?: (tableName: string) => void;
   onColumnClick?: (tableName: string, columnName: string) => void;
 }
 
-export function SchemaBrowser({
-  dataSourceId,
-  isLoading = false,
-  onTableClick,
-  onColumnClick
-}: SchemaBrowserProps) {
-  const [schema, setSchema] = useState<TableSchema[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [loading, setLoading] = useState(isLoading);
-  const [error, setError] = useState<string | null>(null);
+export function SchemaBrowser({ dataSourceId, onTableClick, onColumnClick }: SchemaBrowserProps) {
+  const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    if (!dataSourceId) return;
+  const { data: schema, isLoading, error } = useQuery({
+    queryKey: ['schema', dataSourceId],
+    queryFn: async () => {
+      if (!dataSourceId) return null;
+      const res = await apiRequest('GET', `/api/datasources/${dataSourceId}/schema`);
+      return res.json() as Promise<TableSchema[]>;
+    },
+    enabled: !!dataSourceId
+  });
 
-    setLoading(true);
-    setError(null);
+  const toggleTable = (tableName: string) => {
+    setExpandedTables(prev => {
+      const next = new Set(prev);
+      if (next.has(tableName)) {
+        next.delete(tableName);
+      } else {
+        next.add(tableName);
+      }
+      return next;
+    });
+  };
 
-    // Fetch the schema for the selected data source
-    fetch(`/api/datasources/${dataSourceId}/schema`)
-      .then(response => {
-        if (!response.ok) {
-          throw new Error(`Error fetching schema: ${response.status}`);
-        }
-        return response.json();
-      })
-      .then(data => {
-        setSchema(data);
-        setLoading(false);
-      })
-      .catch(err => {
-        console.error("Error fetching schema:", err);
-        setError(err.message);
-        setLoading(false);
-      });
-  }, [dataSourceId]);
-
-  // Filter schema based on search term
-  const filteredSchema = searchTerm.trim()
-    ? schema.filter(table => 
-        table.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        table.columns.some(column => 
-          column.name.toLowerCase().includes(searchTerm.toLowerCase())
-        )
-      )
-    : schema;
-
-  if (loading || isLoading) {
+  if (isLoading) {
     return (
       <div className="flex flex-col h-full">
         <div className="px-4 py-2 border-b">
@@ -100,7 +61,7 @@ export function SchemaBrowser({
           </h3>
         </div>
         <div className="p-4 text-sm text-red-500">
-          {error}
+          Failed to load schema
         </div>
       </div>
     );
@@ -130,64 +91,42 @@ export function SchemaBrowser({
           Schema Browser
         </h3>
       </div>
-      <div className="p-2">
-        <div className="relative">
-          <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-          <Input
-            placeholder="Search tables or columns..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-8"
-          />
-        </div>
-      </div>
-      
-      <ScrollArea className="flex-1 px-2">
-        {filteredSchema.length === 0 ? (
-          <div className="py-4 text-center text-sm text-gray-500">
-            {searchTerm ? "No matching tables or columns found." : "No tables available."}
+
+      <div className="overflow-auto flex-1">
+        {schema?.map((table) => (
+          <div key={table.name} className="border-b last:border-b-0">
+            <button
+              className="w-full px-4 py-2 flex items-center hover:bg-gray-50 text-left"
+              onClick={() => {
+                toggleTable(table.name);
+                onTableClick?.(table.name);
+              }}
+            >
+              {expandedTables.has(table.name) ? (
+                <ChevronDown className="h-4 w-4 mr-2 text-gray-500" />
+              ) : (
+                <ChevronRight className="h-4 w-4 mr-2 text-gray-500" />
+              )}
+              <span className="font-medium text-sm">{table.name}</span>
+            </button>
+
+            {expandedTables.has(table.name) && (
+              <div className="bg-gray-50 px-4 py-2">
+                {table.columns.map((column) => (
+                  <button
+                    key={column.name}
+                    className="w-full px-4 py-1 text-left hover:bg-gray-100 rounded text-sm flex items-center"
+                    onClick={() => onColumnClick?.(table.name, column.name)}
+                  >
+                    <span className="flex-1">{column.name}</span>
+                    <span className="text-xs text-gray-500">{column.type}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-        ) : (
-          <Accordion type="multiple" className="w-full">
-            {filteredSchema.map((table) => (
-              <AccordionItem key={table.name} value={table.name}>
-                <AccordionTrigger
-                  className="text-sm py-2 hover:bg-gray-50 rounded px-2"
-                  onClick={(e) => {
-                    // Prevent accordion from toggling if we're clicking for selection
-                    if (onTableClick) {
-                      e.stopPropagation();
-                      onTableClick(table.name);
-                    }
-                  }}
-                >
-                  <span className="flex items-center">
-                    <Table className="mr-2 h-4 w-4 text-gray-600" />
-                    {table.name}
-                  </span>
-                </AccordionTrigger>
-                <AccordionContent>
-                  <ul className="space-y-1 pl-6">
-                    {table.columns.map((column) => (
-                      <li 
-                        key={column.name}
-                        className="flex items-center text-xs py-1 px-2 hover:bg-gray-50 rounded cursor-pointer"
-                        onClick={() => onColumnClick && onColumnClick(table.name, column.name)}
-                      >
-                        <span className={`mr-1 ${column.isPrimaryKey ? 'text-amber-500' : column.isForeignKey ? 'text-indigo-500' : 'text-gray-500'}`}>
-                          {column.isPrimaryKey ? '🔑' : column.isForeignKey ? '🔗' : ''}
-                        </span>
-                        <span className="font-medium">{column.name}</span>
-                        <span className="ml-1 text-gray-400 text-xs">({column.type})</span>
-                      </li>
-                    ))}
-                  </ul>
-                </AccordionContent>
-              </AccordionItem>
-            ))}
-          </Accordion>
-        )}
-      </ScrollArea>
+        ))}
+      </div>
     </div>
   );
 }
