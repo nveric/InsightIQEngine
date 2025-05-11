@@ -34,7 +34,17 @@ import {
   Cell,
 } from "recharts";
 
-type ChartType = "line" | "bar" | "pie" | "table";
+type ChartType = "line" | "bar" | "pie" | "table" | "area" | "scatter" | "radar" | "funnel";
+
+interface ChartConfig {
+  showLegend?: boolean;
+  showGrid?: boolean;
+  stacked?: boolean;
+  smooth?: boolean;
+  animation?: boolean;
+  labelPosition?: 'top' | 'center' | 'bottom';
+  theme?: 'default' | 'dark' | 'light';
+}
 
 interface ChartCardProps {
   title: string;
@@ -68,6 +78,14 @@ export function ChartCard({
   isLoading = false,
   onRefresh,
 }: ChartCardProps) {
+  const [config, setConfig] = useState<ChartConfig>({
+    showLegend: true,
+    showGrid: true,
+    smooth: false,
+    animation: true,
+    labelPosition: 'center',
+    theme: 'default'
+  });
   const [chartMode, setChartMode] = useState<ChartType>(chartType);
   const chartRef = useRef<HTMLDivElement>(null);
 

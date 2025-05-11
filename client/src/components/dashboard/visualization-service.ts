@@ -69,3 +69,55 @@ export class VisualizationService {
     return config;
   }
 }
+export interface DataTransformConfig {
+  aggregation?: 'sum' | 'average' | 'count' | 'min' | 'max';
+  groupBy?: string;
+  sortBy?: string;
+  limit?: number;
+}
+
+export class DataTransformUtils {
+  static transform(data: any[], config: DataTransformConfig) {
+    let transformed = [...data];
+    
+    if (config.groupBy) {
+      transformed = this.groupData(transformed, config.groupBy, config.aggregation || 'sum');
+    }
+    
+    if (config.sortBy) {
+      transformed.sort((a, b) => b[config.sortBy!] - a[config.sortBy!]);
+    }
+    
+    if (config.limit) {
+      transformed = transformed.slice(0, config.limit);
+    }
+    
+    return transformed;
+  }
+
+  private static groupData(data: any[], groupBy: string, aggregation: string) {
+    const grouped = data.reduce((acc, item) => {
+      const key = item[groupBy];
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(item);
+      return acc;
+    }, {});
+
+    return Object.entries(grouped).map(([key, values]: [string, any[]]) => ({
+      [groupBy]: key,
+      value: this.aggregate(values, aggregation),
+    }));
+  }
+
+  private static aggregate(data: any[], type: string): number {
+    const values = data.map(item => Number(item.value));
+    switch (type) {
+      case 'sum': return values.reduce((a, b) => a + b, 0);
+      case 'average': return values.reduce((a, b) => a + b, 0) / values.length;
+      case 'min': return Math.min(...values);
+      case 'max': return Math.max(...values);
+      case 'count': return values.length;
+      default: return values.reduce((a, b) => a + b, 0);
+    }
+  }
+}
