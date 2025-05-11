@@ -426,6 +426,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
+  // Get query versions
+  app.get("/api/organizations/:organizationId/queries/:id/versions", async (req, res, next) => {
+    try {
+      const queryId = parseInt(req.params.id);
+      const versions = await storage.getQueryVersions(queryId);
+      res.json(versions);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Get specific version
+  app.get("/api/organizations/:organizationId/queries/:id/versions/:version", async (req, res, next) => {
+    try {
+      const queryId = parseInt(req.params.id);
+      const version = parseInt(req.params.version);
+      const queryVersion = await storage.getQueryVersion(queryId, version);
+      
+      if (!queryVersion) {
+        return res.status(404).json({ message: "Version not found" });
+      }
+      
+      res.json(queryVersion);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Add tag to query
+  app.post("/api/organizations/:organizationId/queries/:id/tags", async (req, res, next) => {
+    try {
+      const queryId = parseInt(req.params.id);
+      const { name } = req.body;
+      
+      const tag = await storage.addQueryTag(queryId, name);
+      res.status(201).json(tag);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // Update a saved query
   app.patch("/api/organizations/:organizationId/queries/:id", async (req, res, next) => {
     try {

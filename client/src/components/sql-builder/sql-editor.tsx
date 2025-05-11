@@ -15,8 +15,10 @@ import {
   FileCode,
   ArrowRight,
   FileQuestion,
-  FileDown
+  FileDown,
+  Share2
 } from 'lucide-react';
+import { SavedQueriesManager } from './saved-queries-manager';
 import { Separator } from '@/components/ui/separator';
 import { ChartCard } from '@/components/dashboard/chart-card';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -68,18 +70,18 @@ export function SqlEditor({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resultsTab, setResultsTab] = useState('table');
-  
+
   // Query history state
   const [queryHistory, setQueryHistory] = useState<QueryHistoryItem[]>(() => {
     const savedHistory = localStorage.getItem('sqlQueryHistory');
     return savedHistory ? JSON.parse(savedHistory) : [];
   });
-  
+
   // Query save dialog state
   const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
   const [queryName, setQueryName] = useState('');
   const [queryDescription, setQueryDescription] = useState('');
-  
+
   // Save history to localStorage when it changes
   useEffect(() => {
     localStorage.setItem('sqlQueryHistory', JSON.stringify(queryHistory));
@@ -103,11 +105,11 @@ export function SqlEditor({
   const handleNlqGenerated = (generatedSql: string) => {
     setQuery(generatedSql);
   };
-  
+
   const loadFromHistory = (historyItem: QueryHistoryItem) => {
     setQuery(historyItem.query);
   };
-  
+
   const clearHistory = () => {
     setQueryHistory([]);
   };
@@ -137,14 +139,14 @@ export function SqlEditor({
       });
 
       const data = await response.json();
-      
+
       if (!response.ok) {
         throw new Error(data.error || response.statusText);
       }
 
       setQueryResults(data);
       setResultsTab('table'); // Default to table view for new results
-      
+
       // Add to query history
       const historyItem: QueryHistoryItem = {
         id: Date.now().toString(),
@@ -153,14 +155,14 @@ export function SqlEditor({
         success: true,
         rowCount: data.rowCount
       };
-      
+
       setQueryHistory(prev => [historyItem, ...prev.slice(0, 19)]); // Keep last 20 queries
-      
+
     } catch (err) {
       console.error('Error executing query:', err);
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
       setError(errorMessage);
-      
+
       // Add failed query to history
       const historyItem: QueryHistoryItem = {
         id: Date.now().toString(),
@@ -168,14 +170,14 @@ export function SqlEditor({
         timestamp: new Date(),
         success: false
       };
-      
+
       setQueryHistory(prev => [historyItem, ...prev.slice(0, 19)]);
-      
+
     } finally {
       setIsLoading(false);
     }
   };
-  
+
   const handleSaveQuery = () => {
     if (onSave && queryName.trim()) {
       onSave(queryName, query);
@@ -218,7 +220,7 @@ export function SqlEditor({
       icon: <FileCode className="h-4 w-4" />
     }
   ];
-  
+
   const applyTemplate = (template: QueryTemplate) => {
     setQuery(template.sql);
   };
@@ -262,7 +264,7 @@ export function SqlEditor({
   // Generate table columns from result
   const getTableColumns = () => {
     if (!queryResults?.columns) return [];
-    
+
     return queryResults.columns.map((column: string) => ({
       key: column,
       header: column
@@ -272,7 +274,7 @@ export function SqlEditor({
   // Generate table data from result
   const getTableData = () => {
     if (!queryResults?.rows) return [];
-    
+
     return queryResults.rows.map((row: any[]) => {
       const rowObj: Record<string, any> = {};
       queryResults.columns.forEach((column: string, idx: number) => {
@@ -281,7 +283,7 @@ export function SqlEditor({
       return rowObj;
     });
   };
-  
+
   // Format the SQL query for display in history
   const formatQueryPreview = (sql: string) => {
     return sql.length > 60 ? sql.substring(0, 57) + '...' : sql;
@@ -299,7 +301,7 @@ export function SqlEditor({
                   <Terminal className="mr-2 h-4 w-4" />
                   SQL Editor
                 </div>
-                
+
                 <div className="flex items-center space-x-2">
                   <TooltipProvider>
                     <Tooltip>
@@ -314,7 +316,7 @@ export function SqlEditor({
                             <DialogHeader>
                               <DialogTitle>Query History</DialogTitle>
                             </DialogHeader>
-                            
+
                             <div className="h-[400px]">
                               <ScrollArea className="h-full pr-4">
                                 {queryHistory.length === 0 ? (
@@ -360,7 +362,7 @@ export function SqlEditor({
                                 )}
                               </ScrollArea>
                             </div>
-                            
+
                             <DialogFooter>
                               <Button 
                                 variant="outline" 
@@ -382,7 +384,7 @@ export function SqlEditor({
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
-                  
+
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -396,7 +398,7 @@ export function SqlEditor({
                             <DialogHeader>
                               <DialogTitle>Query Templates</DialogTitle>
                             </DialogHeader>
-                            
+
                             <div className="space-y-2 mt-2">
                               {queryTemplates.map((template, index) => (
                                 <div 
@@ -418,7 +420,7 @@ export function SqlEditor({
                                 </div>
                               ))}
                             </div>
-                            
+
                             <DialogFooter>
                               <DialogClose asChild>
                                 <Button variant="secondary" size="sm">Close</Button>
@@ -429,6 +431,34 @@ export function SqlEditor({
                       </TooltipTrigger>
                       <TooltipContent>
                         <p>Query Templates</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Dialog>
+                          <DialogTrigger asChild>
+                            <Button variant="ghost" size="sm">
+                              <Save className="h-4 w-4" />
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent className="max-w-md">
+                            <DialogHeader>
+                              <DialogTitle>Saved Queries</DialogTitle>
+                            </DialogHeader>
+                            <SavedQueriesManager dataSourceId={dataSourceId} query={query} setQuery={setQuery}/>
+                            <DialogFooter>
+                              <DialogClose asChild>
+                                <Button variant="secondary" size="sm">Close</Button>
+                              </DialogClose>
+                            </DialogFooter>
+                          </DialogContent>
+                        </Dialog>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Saved Queries</p>
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
@@ -543,7 +573,7 @@ export function SqlEditor({
                       <TabsTrigger value="chart">Chart</TabsTrigger>
                     </TabsList>
                   </div>
-                  
+
                   <TabsContent value="table" className="p-4 min-h-[300px]">
                     <DataTable
                       columns={getTableColumns()}
@@ -552,7 +582,7 @@ export function SqlEditor({
                       showExport={true}
                     />
                   </TabsContent>
-                  
+
                   <TabsContent value="chart" className="p-4 min-h-[300px]">
                     <ChartCard
                       title="Query Results Visualization"
@@ -571,7 +601,7 @@ export function SqlEditor({
         <div className="mx-4">
           <Separator orientation="vertical" />
         </div>
-        
+
         {/* Right sidebar - Schema Browser and NL2SQL */}
         <div className="w-64 flex flex-col">
           <Tabs defaultValue="schema" className="flex-1 flex flex-col">
@@ -579,7 +609,7 @@ export function SqlEditor({
               <TabsTrigger value="schema">Schema</TabsTrigger>
               <TabsTrigger value="nlq">Natural Language</TabsTrigger>
             </TabsList>
-            
+
             <TabsContent value="schema" className="flex-1 flex flex-col border rounded-md overflow-hidden mt-0">
               <SchemaBrowser 
                 dataSourceId={dataSourceId}
@@ -587,7 +617,7 @@ export function SqlEditor({
                 onColumnClick={handleColumnClick}
               />
             </TabsContent>
-            
+
             <TabsContent value="nlq" className="flex-1 flex flex-col border rounded-md overflow-hidden mt-0">
               <NlqConverter 
                 dataSourceId={dataSourceId}

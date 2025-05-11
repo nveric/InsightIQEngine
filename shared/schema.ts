@@ -56,6 +56,14 @@ export const dataSources = pgTable("data_sources", {
   status: text("status").default("active"),
 });
 
+// Query Tags Model
+export const queryTags = pgTable("query_tags", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // Saved Query Model
 export const savedQueries = pgTable("saved_queries", {
   id: serial("id").primaryKey(),
@@ -63,12 +71,37 @@ export const savedQueries = pgTable("saved_queries", {
   description: text("description"),
   query: text("query").notNull(),
   dataSourceId: integer("data_source_id").notNull().references(() => dataSources.id, { onDelete: "cascade" }),
-  userId: integer("user_id").notNull().references(() => users.id), // Creator of the query
+  userId: integer("user_id").notNull().references(() => users.id),
   organizationId: integer("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
-  visualizationType: text("visualization_type"), // bar, line, pie, etc.
-  visualizationConfig: jsonb("visualization_config"), // JSON configuration for the visualization
+  visualizationType: text("visualization_type"),
+  visualizationConfig: jsonb("visualization_config"),
+  isPublic: boolean("is_public").default(false),
+  category: text("category"),
+  version: integer("version").default(1),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Query Version History
+export const queryVersions = pgTable("query_versions", {
+  id: serial("id").primaryKey(),
+  queryId: integer("query_id").notNull().references(() => savedQueries.id, { onDelete: "cascade" }),
+  version: integer("version").notNull(),
+  query: text("query").notNull(),
+  visualizationType: text("visualization_type"),
+  visualizationConfig: jsonb("visualization_config"),
+  userId: integer("user_id").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Query Tags Relationship
+export const queryTagsRelations = pgTable("query_tags_relations", {
+  queryId: integer("query_id").notNull().references(() => savedQueries.id, { onDelete: "cascade" }),
+  tagId: integer("tag_id").notNull().references(() => queryTags.id, { onDelete: "cascade" }),
+}, (table) => {
+  return {
+    pk: primaryKey(table.queryId, table.tagId),
+  };
 });
 
 // Dashboard Model
