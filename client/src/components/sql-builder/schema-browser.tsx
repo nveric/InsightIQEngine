@@ -91,6 +91,42 @@ export function SchemaBrowser({ dataSourceId, onTableClick, onColumnClick }: Sch
           Schema Browser
         </h3>
       </div>
+      <div className="overflow-y-auto flex-1 p-2">
+        {schema?.map((table) => (
+          <div key={table.name} className="mb-2">
+            <button
+              onClick={() => {
+                toggleTable(table.name);
+                onTableClick?.(table.name);
+              }}
+              className="w-full text-left px-2 py-1 hover:bg-gray-100 rounded flex items-center text-sm"
+            >
+              {expandedTables.has(table.name) ? (
+                <ChevronDown className="h-4 w-4 mr-1" />
+              ) : (
+                <ChevronRight className="h-4 w-4 mr-1" />
+              )}
+              {table.name}
+            </button>
+            
+            {expandedTables.has(table.name) && (
+              <div className="ml-6 mt-1">
+                {table.columns.map((column) => (
+                  <button
+                    key={column.name}
+                    onClick={() => onColumnClick?.(table.name, column.name)}
+                    className="w-full text-left px-2 py-1 hover:bg-gray-100 rounded text-sm flex items-center"
+                  >
+                    <span className={`w-2 h-2 rounded-full mr-2 ${column.isPrimaryKey ? 'bg-yellow-400' : column.isForeignKey ? 'bg-blue-400' : 'bg-gray-400'}`} />
+                    <span>{column.name}</span>
+                    <span className="ml-auto text-xs text-gray-500">{column.type}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
 
       <div className="overflow-auto flex-1">
         {schema?.map((table) => (
